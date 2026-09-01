@@ -1,0 +1,27 @@
+name: game_19
+description: Game 19 - Trivia Quiz Game
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  firebase_core: ^2.24.0
+  cloud_firestore: ^4.14.0
+  in_app_purchase: ^3.1.13
+  google_fonts: ^6.1.0
+  shimmer: ^3.0.0
+
+dependency_overrides:
+  in_app_purchase_storekit: 0.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+
+flutter:
+  uses-material-design: true
