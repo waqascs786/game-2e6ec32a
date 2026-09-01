@@ -1,0 +1,186 @@
+name: Build iOS Simulator
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_id:
+        description: 'Game ID'
+        required: true
+      game_name:
+        description: 'Game Name'
+        required: true
+      user_email:
+        description: 'User email for notifications'
+        required: false
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    outputs:
+      public_key: ${{ steps.upload.outputs.public_key }}
+      ios_url: ${{ steps.release.outputs.ios_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.27.4
+          channel: stable
+
+      - name: Save source files
+        run: |
+          mkdir -p /tmp/saved
+          cp -r lib /tmp/saved/lib
+          cp pubspec.yaml /tmp/saved/pubspec.yaml
+          cp pubspec.lock /tmp/saved/pubspec.lock 2>/dev/null || true
+
+      - name: Create Flutter scaffold in workspace
+        run: |
+          ORG="com.game19"
+          PROJ="ios"
+          rm -rf android ios macos linux windows web test
+          flutter create --org "$ORG" --project-name "$PROJ" --platforms ios . 2>&1 | tail -5
+
+      - name: Restore source files
+        run: |
+          rm -rf lib
+          cp -r /tmp/saved/lib .
+          cp /tmp/saved/pubspec.yaml .
+          cp /tmp/saved/pubspec.lock . 2>/dev/null || true
+          echo "=== Verify ==="
+          ls -la lib/main.dart
+          head -3 lib/main.dart
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Set app name
+        run: |
+          python3 -c "
+          import re
+          with open('ios/Runner/Info.plist') as f: c = f.read()
+          c = re.sub(r'<string>Runner</string>', '<string>Game 19</string>', c, count=1)
+          with open('ios/Runner/Info.plist', 'w') as f: f.write(c)
+          print('iOS app name set')"
+
+      - name: Build iOS simulator
+        run: |
+          flutter build ios --debug --simulator
+          cd build/ios/iphonesimulator
+          zip -r app-simulator.zip Runner.app
+
+      - name: Upload iOS build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator
+          path: build/ios/iphonesimulator/app-simulator.zip
+          retention-days: 7
+
+      - name: Create GitHub Release with download
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="ios-${{ github.event.inputs.game_id }}"
+          gh release delete "$TAG" --repo "${{ github.repository }}" -y 2>/dev/null || true
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "iOS Build: ${{ github.event.inputs.game_name }}" \
+            --notes "iOS simulator build for ${{ github.event.inputs.game_name }}" \
+            build/ios/iphonesimulator/app-simulator.zip
+          IOS_URL="https://github.com/${{ github.repository }}/releases/download/$TAG/app-simulator.zip"
+          echo "ios_url=$IOS_URL" >> $GITHUB_OUTPUT
+
+      - name: Upload iOS build to Appetize.io
+        id: upload
+        env:
+          APPETIZE_TOKEN: ${{ secrets.APPETIZE_TOKEN }}
+        run: |
+          SHORT_ID="${{ github.event.inputs.game_id }}"
+          SHORT_ID="${SHORT_ID%%-*}"
+          SHORT_ID="${SHORT_ID:0:20}"
+          RESPONSE=$(curl -s -X POST \
+            -H "X-API-KEY: $APPETIZE_TOKEN" \
+            -F "file=@build/ios/iphonesimulator/app-simulator.zip" \
+            -F "platform=ios" \
+            -F "tags[]=$SHORT_ID" \
+            https://api.appetize.io/v2/builds)
+          echo "iOS response: $RESPONSE"
+          BUILD_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
+          echo "public_key=$BUILD_ID" >> $GITHUB_OUTPUT
+
+  notify:
+    needs: [build-ios]
+    if: always() && needs.build-ios.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write email script
+        run: |
+          cat > /tmp/send_email.py << "ENDSCRIPT"
+          import smtplib, os
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+          game_name = os.environ["GAME_NAME"]
+          user_email = os.environ["USER_EMAIL"]
+          appetize_url = os.environ["APPETIZE_URL"]
+          ios_url = os.environ.get("IOS_URL", "")
+          game_id = os.environ["GAME_ID"]
+          gmail_pass = os.environ["GMAIL_APP_PASSWORD"]
+          html = "<h2>Your iOS build is ready!</h2>"
+          html += "<p><b>" + game_name + "</b> iOS simulator build is ready.</p>"
+          html += "<h3>Live Preview</h3>"
+          html += "<p><b>iOS:</b> <a href='" + appetize_url + "'>" + appetize_url + "</a></p>"
+          if ios_url:
+              html += "<h3>Download</h3>"
+              html += "<p><b>iOS Simulator:</b> <a href='" + ios_url + "'>Download Build</a></p>"
+          html += "<hr><p><small>Game ID: " + game_id + "</small></p>"
+          msg = MIMEMultipart("alternative")
+          msg["Subject"] = "iOS Build Ready: " + game_name
+          msg["From"] = "Quiz Game Builder <waqascsme@gmail.com>"
+          msg["To"] = user_email
+          msg.attach(MIMEText(html, "html"))
+          server = smtplib.SMTP("smtp.gmail.com", 587)
+          server.starttls()
+          server.login("waqascsme@gmail.com", gmail_pass)
+          server.sendmail("waqascsme@gmail.com", user_email, msg.as_string())
+          server.quit()
+          print("Email sent to " + user_email)
+          ENDSCRIPT
+
+      - name: Send email via Gmail SMTP
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GAME_NAME: ${{ github.event.inputs.game_name }}
+          USER_EMAIL: ${{ github.event.inputs.user_email }}
+          GAME_ID: ${{ github.event.inputs.game_id }}
+          IOS_KEY: ${{ needs.build-ios.outputs.public_key }}
+          IOS_URL: ${{ needs.build-ios.outputs.ios_url }}
+        run: |
+          if [ -z "$USER_EMAIL" ]; then
+            echo "No user email, skipping notification"
+            exit 0
+          fi
+          export APPETIZE_URL="https://appetize.io/app/$IOS_KEY?autoplay=true"
+          if [ -z "$GMAIL_APP_PASSWORD" ]; then
+            echo "No Gmail app password, skipping email"
+            echo "::notice::iOS Preview: $APPETIZE_URL"
+            exit 0
+          fi
+          python3 /tmp/send_email.py
+
+      - name: Print preview links
+        if: always()
+        env:
+          IOS_KEY: ${{ needs.build-ios.outputs.public_key }}
+          IOS_URL: ${{ needs.build-ios.outputs.ios_url }}
+        run: |
+          echo "=========================================="
+          echo "  iOS BUILD COMPLETE!"
+          echo "=========================================="
+          echo "iOS Preview: https://appetize.io/app/$IOS_KEY"
+          echo "iOS Download: $IOS_URL"
+          echo "=========================================="
+          echo "::notice::iOS Preview: https://appetize.io/app/$IOS_KEY"
