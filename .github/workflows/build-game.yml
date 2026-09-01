@@ -1,0 +1,227 @@
+name: Build & Preview Game
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_id:
+        description: 'Game ID'
+        required: true
+      game_name:
+        description: 'Game Name'
+        required: true
+      user_email:
+        description: 'User email for notifications'
+        required: false
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      public_key: ${{ steps.upload.outputs.public_key }}
+      apk_url: ${{ steps.release.outputs.apk_url }}
+      aab_url: ${{ steps.release.outputs.aab_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.27.4
+          channel: stable
+
+      - name: Save source files
+        run: |
+          mkdir -p /tmp/saved
+          cp -r lib /tmp/saved/lib
+          cp pubspec.yaml /tmp/saved/pubspec.yaml
+          cp pubspec.lock /tmp/saved/pubspec.lock 2>/dev/null || true
+
+      - name: Create Flutter scaffold in workspace
+        run: |
+          ORG="com.game19"
+          PROJ="android"
+          flutter create --org "$ORG" --project-name "$PROJ" . 2>&1 | tail -5
+
+      - name: Restore source files
+        run: |
+          rm -rf lib
+          cp -r /tmp/saved/lib .
+          cp /tmp/saved/pubspec.yaml .
+          cp /tmp/saved/pubspec.lock . 2>/dev/null || true
+          echo "=== Verify ==="
+          ls -la lib/main.dart
+          head -3 lib/main.dart
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Set app name
+        run: |
+          python3 - << 'PY'
+          import re
+          p = 'android/app/src/main/AndroidManifest.xml'
+          with open(p) as f: c = f.read()
+          c = re.sub(r'android:label="[^"]*"', 'android:label="Game 19"', c)
+          with open(p, 'w') as f: f.write(c)
+          print('App name set to: Game 19')
+          PY
+
+      - name: Decode signing keystore
+        run: echo "MIIK+AIBAzCCCqIGCSqGSIb3DQEHAaCCCpMEggqPMIIKizCCBcIGCSqGSIb3DQEHAaCCBbMEggWvMIIFqzCCBacGCyqGSIb3DQEMCgECoIIFQDCCBTwwZgYJKoZIhvcNAQUNMFkwOAYJKoZIhvcNAQUMMCsEFIh49uXCyLdgjuSWrKXq0MBmLsaSAgInEAIBIDAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQZCWMkep4dH5OM0x9NUTlGQSCBNC1F9VoSbxDB4lme1QGRsRXIvhuIjLYNSEFHTlPHPQIM47HgSmDDMaxvOhjP/sFqqzhWKZVPfgO/1lAwoaG4Qtk5RTECnYRUpCka6WrYEm//jFNiaMvCUmORYKoY9DpUif76XlizDtooZhquV/B00zrK6hSa4qVu0gqooF98nxGr3S5cu6o6oZ+srOfk8/g3DmZHSt6xVYGY3mOOKG/YsR4rb1e6NvWKYjljXbFRxlWDYa9IGtlmEQPQc9KhBbYT8l73sZaSegz1lkgUPb3+cZtlfoef3Bg9MljHwLvOuuO+yhQ5YOwL/hRFa7fG5fubpWYlOXTQ57LOORY8SkBB7RpawEhLnsLyhHLW3D40u4Lw2PHwuBd7BYCr2MaT2UEPehQgBQquqYnQdp++hjibEmEQ9CpClzYZT/Gq5/RdASmDCytLaq8stBQ9FLSfeC+u6XTgmodKM+3vZZL639Cxx3QUBlKyKCjBfZyE/4nqp+hM6l08tgpjnz12hOY0VKpR5ZXiQQSU1rre7jQK94RKYARxDOb2n5P6q0jAQAYzCxYbSKrAxcNm+gRNjL3Sq1WoZKX0FvFbk396L3I/U0qC5vjX+nFXqhZIoNddob/O6SlXpgPnAz/kbRFgSAJ/KPhuyWZr8oBlsrMTCz9rH2QmVrT11RQV/6XZk2MJe3bvNWtwREdu7Cwby93LVvyVNyDj0iVtztp4FvoL5qScjs+1UDALaNjGh3IRI+AfFWJ+5wz+9HeXQUPfZqBl7QULHAcCR+a54KdZt32na61PSJeuwii/5yaLFnm/9FnoXw/b4cuhU5F4WeKRbgU/zunaDKmBRfRHY96wthNyJ0VekzXj31UF6WcoqVLtqPWgeiMt6HIW8U4NNspYiBhTcKIlLojaWNTMlmlD3jaTo1J5aj7sAfa4t+NvVPQUwZXR0sLY88wntV0wWj54nSbXgtUdh4IQkirjQ432EnguZmFVcw+Uze9G/+x+bn3epMIbPNYYoTORw2e2Stn3guhAV6LlDoq6zaa32gqG32VKWN5CJW++Ls8/I/PVAvQnJxXE4+QANEDQ2slA5GMWXOMAMaLgYpfVBO26fzdukyh/cnANW3MOb15tqF16Ih1VvZfZrW0U4K/j/mLsLzh8WOk+Hrp9Db+sfwhLOJHsM+4VS7FjKymX4rT0FFzMcDn3n/rtx2vUFndT7u56zGdFILQIU+a9dChWgWlQz2mG6cKgH5VeE7XnOvQ43NXmPD6xuyDRQheJ0Gf3vXQpV4rfNpCpedf0NtPD0HNioy4zORYTgptM6yiqW0715OpBhmFUJVB4KeSU6csm/XjTvt8PMeb+c8W3FrvvX8FSpzZue3zoPZ2/iZTgWCDT/YFpyCOwn/CGzVTZ/5Plhj4n3W3wzDIp0/JpwRKayIj05KaJMeC0PHAcA2o1umJ4uBiuZMlxyhAr90Y5NqC4yuAG0Q6EBrDKZe7UW4HTM90AP1tzNy/5iYAMQ5ctkueTz4LYWSkQOq/F8G7svksqXgXNfzKv48OFOMdJCcFgv7+Of6g8sn6TOZMVDTusw5Y+R7TwKo1yGgyVDvPNr+vhoRVqJ1VebV5CGqRmlmLLlJwqF1IvscDXQHdejYBV+jQmnqpZMafPa+y1FwrID3cajFUMC8GCSqGSIb3DQEJFDEiHiAAcABsAGEAdABmAG8AcgBtAF8AcgBlAGwAZQBhAHMAZTAhBgkqhkiG9w0BCRUxFAQSVGltZSAxNzg3ODMxMDE0NzE3MIIEwQYJKoZIhvcNAQcGoIIEsjCCBK4CAQAwggSnBgkqhkiG9w0BBwEwZgYJKoZIhvcNAQUNMFkwOAYJKoZIhvcNAQUMMCsEFN7Q/sRbWLwjYFNrEsdSUHuBcQz+AgInEAIBIDAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQVA+THUGZ8Wub+zRqr9bwz4CCBDCb13Ro9HNgPJGVlGHdUCYlkKsbEAsy3sTw56WMR+5DzgTPRNTYCoPynoDUdz0/tbXzOBa8C0DCZwBsk0T9BrZI71xEw4cmMU1m4XldqHY+NlcZaOIKtklOQNH8yAug2eDWb2Qzs7C87+uQu9SVqh38LuznZUbpfJrGfKb4sfK+SiYL7YUy6+iglvMfoadsIe6LzayEdYKiiBcyL527q9Lsg/NsDuq/Vg1Gmbtk+a6GRc0uRgdg3n0NoP8MHOsjsHKnIDLXbdduIwPmHDJwff9VsBPh00BcES3fwBH/321WWMauP8WUvHT3ipxa+84aQ7BHagjhvqwPau97somTbIlkr0sOyRT827c9Kzlss7WbDMKUl7Nqg3ikvh3pF1Dyzt01/sO98w0MpN1RgMD9QH/xLgImFX5cdI31m6DbUxk4q6R2k7i4mtzb4p8X3WC9JQG1iuk/oxYBmuflBysfi2aL0MbaPhJNz5pYo6hxHC7rTxNR6VBEatJe6SKV1GUnbwz+BC0O/h8CIRwcktSfvkK7Mh9IP2+WcbC22aWTp9P8QR1roWnOTlCHAucg2JcSmAoH0+uiRZOElLVQrGOXXo5CqcHl40mF8U4w62+tMasBzOWnVMRJA8UNvZq6iJc8mEqc43oG1LcTVKsOY3hrC6lArED8CT5PfMd6AxdXa2SrQuozgEg7P/XvyTgoViVUSp8c2b/TPn+fFdomfnHV5K1Uuc21eoPbr/ky8PZpd5VHfNbkcR96I0I0TG9uqdcQ8gauV0VRmp5R7HIXJaszK7d7JrFFKKgOddkwmB30TILlqgCZsbWq0Z/dm2YqDgjuyhJ35P5VZ/W9pNYtsFlS8gU5XlcmetCC5DtmLcveV2Mgx6oF2nR8Yo+hfwF+15KzFwFQyAjDFtwDtCf5CjRfNRW729ureKGhnJzk7ACzSeazDFWM7zvMQ+Q7u5XbFR418XBBPBppjOjNcmMdbuoDin2PtXydTH+wG6ohEDKtuuCeYDs5DVwRhO+0hdZTukY05GkddbdksSZzat6NDBVg3aFrOvtU6eQwvb+06fhess/9GVgCEJoOsIBVHN/JrPzsgNWEuEbhr9mqPhrre9th9iqbRHaVVwJ+1XZFFn6OO4k1s0mE4uHfC9IE4TagVqmUuR2ors+kK9IoadWIr1sye7Dr+W9h6ees53mboI8xtOcG2D8IUG3wQl7aV7T4ZpCsrRPBaWD53cxrpcA/YKMk17Ui3Os4l+R4tWBFfA8yNxrmNeOmyyTzVMHodTwZsGQ6r3/yWZaOCnFMLzsxpoocboLEy8gUItqsNYx+qcLJXod9cD08BydDswJynv5/DePXtyApIU0CdLoK/zF6RhINlV5OGPi/yFQW4HpZB7B9bvf63b1p+4D3fSDzrbUaUBrgrB/CqMEmGq4JC/LYyuKUuG7nME0wMTANBglghkgBZQMEAgEFAAQg3X8wzWs/5qCTGrfSOKdu0XBavDAwbRme29zGc6T1eA8EFBp2n9jPweuawIyMrj71/ePjj+0nAgInEA==" | base64 -d > /tmp/release.jks
+
+      - name: Configure Android signing
+        run: |
+          python3 -c "
+          import re
+          with open('android/app/build.gradle') as f: c = f.read()
+          if 'signingConfigs' in c:
+              print('Signing already configured')
+          else:
+              signing = '\n    signingConfigs {\n        release {\n            keyAlias = \'platform_release\'\n            keyPassword = \'QuizNinja2024!\'\n            storeFile = file(\'/tmp/release.jks\')\n            storePassword = \'QuizNinja2024!\'\n        }\n    }\n'
+              c = c.replace('android {', 'android {' + signing, 1)
+              c = c.replace('signingConfig = signingConfigs.debug', 'signingConfig = signingConfigs.release')
+              with open('android/app/build.gradle', 'w') as f: f.write(c)
+              print('Signing configured')
+          "
+
+      - name: Build Android debug APK
+        run: flutter build apk --debug
+
+      - name: Build Android release APK
+        run: flutter build apk --release
+
+      - name: Build Android release AAB
+        run: flutter build appbundle --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 7
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-aab
+          path: build/app/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+      - name: Create GitHub Release with downloads
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="release-${{ github.event.inputs.game_id }}"
+          gh release delete "$TAG" --repo "${{ github.repository }}" -y 2>/dev/null || true
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Build: ${{ github.event.inputs.game_name }}" \
+            --notes "Automated build for ${{ github.event.inputs.game_name }}" \
+            build/app/outputs/flutter-apk/app-release.apk \
+            build/app/outputs/bundle/release/app-release.aab
+          APK_URL="https://github.com/${{ github.repository }}/releases/download/$TAG/app-release.apk"
+          AAB_URL="https://github.com/${{ github.repository }}/releases/download/$TAG/app-release.aab"
+          echo "apk_url=$APK_URL" >> $GITHUB_OUTPUT
+          echo "aab_url=$AAB_URL" >> $GITHUB_OUTPUT
+
+      - name: Upload APK to Appetize.io
+        id: upload
+        env:
+          APPETIZE_TOKEN: ${{ secrets.APPETIZE_TOKEN }}
+        run: |
+          SHORT_ID="${{ github.event.inputs.game_id }}"
+          SHORT_ID="${SHORT_ID%%-*}"
+          SHORT_ID="${SHORT_ID:0:20}"
+          RESPONSE=$(curl -s -X POST \
+            -H "X-API-KEY: $APPETIZE_TOKEN" \
+            -F "file=@build/app/outputs/flutter-apk/app-release.apk" \
+            -F "platform=android" \
+            -F "tags[]=$SHORT_ID" \
+            https://api.appetize.io/v2/builds)
+          echo "Android response: $RESPONSE"
+          BUILD_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
+          echo "public_key=$BUILD_ID" >> $GITHUB_OUTPUT
+
+  notify:
+    needs: [build-android]
+    if: always() && needs.build-android.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write email script
+        run: |
+          cat > /tmp/send_email.py << "ENDSCRIPT"
+          import smtplib, os
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+          game_name = os.environ["GAME_NAME"]
+          user_email = os.environ["USER_EMAIL"]
+          android_url = os.environ["ANDROID_URL"]
+          apk_url = os.environ.get("APK_URL", "")
+          aab_url = os.environ.get("AAB_URL", "")
+          game_id = os.environ["GAME_ID"]
+          gmail_pass = os.environ["GMAIL_APP_PASSWORD"]
+          html = "<h2>Your game is ready!</h2>"
+          html += "<p><b>" + game_name + "</b> has been built and is ready to preview on Appetize.io.</p>"
+          html += "<h3>Live Preview</h3>"
+          html += "<p><b>Android:</b> <a href='" + android_url + "'>" + android_url + "</a></p>"
+          html += "<h3>Download Builds</h3>"
+          if apk_url:
+              html += "<p><b>Android APK:</b> <a href='" + apk_url + "'>Download APK</a></p>"
+          if aab_url:
+              html += "<p><b>Play Store AAB:</b> <a href='" + aab_url + "'>Download AAB</a> (submit to Play Console)</p>"
+          html += "<hr><p><small>Game ID: " + game_id + "</small></p>"
+          msg = MIMEMultipart("alternative")
+          msg["Subject"] = "Game Build Ready: " + game_name
+          msg["From"] = "Quiz Game Builder <waqascsme@gmail.com>"
+          msg["To"] = user_email
+          msg.attach(MIMEText(html, "html"))
+          server = smtplib.SMTP("smtp.gmail.com", 587)
+          server.starttls()
+          server.login("waqascsme@gmail.com", gmail_pass)
+          server.sendmail("waqascsme@gmail.com", user_email, msg.as_string())
+          server.quit()
+          print("Email sent to " + user_email)
+          ENDSCRIPT
+
+      - name: Send email via Gmail SMTP
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GAME_NAME: ${{ github.event.inputs.game_name }}
+          USER_EMAIL: ${{ github.event.inputs.user_email }}
+          GAME_ID: ${{ github.event.inputs.game_id }}
+          ANDROID_KEY: ${{ needs.build-android.outputs.public_key }}
+          APK_URL: ${{ needs.build-android.outputs.apk_url }}
+          AAB_URL: ${{ needs.build-android.outputs.aab_url }}
+        run: |
+          if [ -z "$USER_EMAIL" ]; then
+            echo "No user email, skipping notification"
+            exit 0
+          fi
+          export ANDROID_URL="https://appetize.io/app/$ANDROID_KEY?autoplay=true"
+          if [ -z "$GMAIL_APP_PASSWORD" ]; then
+            echo "No Gmail app password, skipping email"
+            echo "::notice::Android Preview: $ANDROID_URL"
+            exit 0
+          fi
+          python3 /tmp/send_email.py
+
+      - name: Print preview links
+        if: always()
+        env:
+          ANDROID_KEY: ${{ needs.build-android.outputs.public_key }}
+        run: |
+          echo "=========================================="
+          echo "  GAME BUILD COMPLETE!"
+          echo "=========================================="
+          echo "Android: https://appetize.io/app/$ANDROID_KEY"
+          echo "=========================================="
+          echo "::notice::Android Preview: https://appetize.io/app/$ANDROID_KEY"
