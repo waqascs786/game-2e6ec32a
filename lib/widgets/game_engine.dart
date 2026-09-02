@@ -1,5 +1,4 @@
 import 'dart:math';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -46,6 +45,7 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
   List<String> _selectedOptions = [];
   List<String> _shuffledLetters = [];
   List<int> _usedLetterIndices = [];
+  List<int> _answerGridIndices = [];
   String _typedAnswer = '';
   _Screen _screen = _Screen.packSelect;
   String? _selectedPackId;
@@ -127,6 +127,9 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
   void didUpdateWidget(covariant GameEngine oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.currentLevel != widget.currentLevel) {
+      if (!_hasPacks) {
+        _internalLevelIndex = widget.currentLevel;
+      }
       _initLevel();
     }
   }
@@ -136,8 +139,12 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
     _showComplete = false;
     _selectedOptions = [];
     _usedLetterIndices = [];
+    _answerGridIndices = [];
     _typedAnswer = '';
     _fillController.clear();
+    if (_screen == _Screen.playing && !_hasPacks) {
+      _internalLevelIndex = widget.currentLevel;
+    }
     final packLevels = _currentPackLevels;
     final idx = _internalLevelIndex;
     if (_screen == _Screen.playing && packLevels.isNotEmpty && idx < packLevels.length) {
@@ -272,12 +279,7 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
 
     final urls = _getUrls(level);
     if (urls.isEmpty) {
-      return Container(
-        margin: const EdgeInsets.symmetric(horizontal: 12),
-        height: 120,
-        decoration: BoxDecoration(color: const Color(0xFF30363D), borderRadius: BorderRadius.circular(12)),
-        child: const Center(child: Icon(Icons.image, size: 48, color: Colors.grey)),
-      );
+      return const SizedBox.shrink();
     }
 
     if (count == 1) {
@@ -623,8 +625,6 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
         children: [
           _buildHeader(),
           _buildQuestion(level),
-          const SizedBox(height: 8),
-          Expanded(child: _buildImageArea(level)),
           _buildAnswerSlots(answer),
           const SizedBox(height: 8),
           Padding(
@@ -664,21 +664,36 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
   Widget _buildHangmanScreen(GameLevel level) {
     final answer = level.answer.toUpperCase();
     final wrongGuesses = _selectedOptions.where((o) => !answer.contains(o)).toList();
+    final wrongCount = wrongGuesses.length;
+    final won = answer.split('').every((c) => _selectedOptions.contains(c));
+    final lost = wrongCount >= 6;
     return SafeArea(
       child: Column(
         children: [
           _buildHeader(),
           _buildQuestion(level),
-          const SizedBox(height: 4),
-          Text('Wrong guesses: ${wrongGuesses.length}/6', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+          if (level.hint.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Text(level.hint, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+            ),
           const SizedBox(height: 8),
-          Expanded(child: _buildImageArea(level)),
+          SizedBox(
+            height: 120,
+            child: CustomPaint(
+              size: const Size(120, 120),
+              painter: _HangmanPainter(wrongCount: wrongCount),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text('Wrong guesses: $wrongCount/6', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+          const SizedBox(height: 8),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: answer.split('').map((char) {
-                final revealed = _currentAnswer.contains(char);
+                final revealed = _selectedOptions.contains(char);
                 return Container(
                   width: 32, height: 36, margin: const EdgeInsets.symmetric(horizontal: 2),
                   decoration: BoxDecoration(
@@ -692,38 +707,57 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
             ),
           ),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 6, runSpacing: 6, alignment: WrapAlignment.center,
-            children: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((letter) {
-              final used = _selectedOptions.contains(letter);
-              final inWord = answer.contains(letter);
-              return GestureDetector(
-                onTap: used ? null : () {
-                  _playSound();
-                  setState(() {
-                    _selectedOptions.add(letter);
-                    if (inWord) {
-                      for (int i = 0; i < answer.length; i++) {
-                        if (answer[i] == letter && !_currentAnswer.contains(letter)) {
-                          _currentAnswer += letter;
-                        }
-                      }
-                    }
-                  });
-                  _checkAnswer(answer);
-                },
-                child: Container(
-                  width: 36, height: 36,
-                  decoration: BoxDecoration(
-                    color: used ? (inWord ? Colors.green.shade800 : Colors.red.shade800) : _getColor('primary'),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Center(child: Text(letter, style: TextStyle(color: used ? Colors.grey : Colors.white, fontWeight: FontWeight.bold, fontSize: 14))),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: GridView.builder(
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 9, crossAxisSpacing: 4, mainAxisSpacing: 4,
                 ),
-              );
-            }).toList(),
+                itemCount: 26,
+                itemBuilder: (context, i) {
+                  final letter = String.fromCharCode(65 + i);
+                  final guessed = _selectedOptions.contains(letter);
+                  final isCorrect = guessed && answer.contains(letter);
+                  final isWrong = guessed && !answer.contains(letter);
+                  return GestureDetector(
+                    onTap: (guessed || won || lost) ? null : () {
+                      _playSound();
+                      setState(() => _selectedOptions.add(letter));
+                      if (won || lost) return;
+                      final allRevealed = answer.split('').every((c) => _selectedOptions.contains(c));
+                      if (allRevealed) {
+                        _playSound();
+                        _animController.forward(from: 0);
+                        setState(() => _showComplete = true);
+                      } else if (_selectedOptions.where((o) => !answer.contains(o)).length >= 6) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Game Over! Try again.'), backgroundColor: Colors.red),
+                        );
+                        setState(() => _initLevel());
+                      }
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: guessed
+                            ? (isWrong ? const Color(0xFFE53935).withOpacity(0.5) : isCorrect ? _getColor('primary')!.withOpacity(0.5) : _getColor('primary'))
+                            : _getColor('primary'),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Center(
+                        child: Text(
+                          guessed ? '' : letter,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
           ),
-          _buildActionButtons(level),
+          const SizedBox(height: 8),
         ],
       ),
     );
@@ -801,16 +835,28 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
 
   // ========== CLASSIFICATION ==========
   Widget _buildClassificationScreen(GameLevel level) {
-    final categories = level.options;
-    final correctMap = <String, List<String>>{};
-    try {
-      final decoded = jsonDecode(level.answer);
-      if (decoded is Map) {
-        decoded.forEach((k, v) {
-          correctMap[k] = List<String>.from(v);
-        });
+    final categories = level.answer.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    final itemToCategory = <String, String>{};
+    final items = <String>[];
+    final available = <String>[];
+    for (final raw in level.emojis) {
+      final parts = raw.split('|');
+      if (parts.length == 2) {
+        final cat = parts[0].trim();
+        final val = parts[1].trim();
+        itemToCategory[val] = cat;
+        items.add(val);
+        available.add(val);
       }
-    } catch (_) {}
+    }
+    final slots = <String, List<String>>{};
+    for (final cat in categories) {
+      slots[cat] = [];
+    }
+    if (_selectedOptions.isEmpty && available.isNotEmpty) {
+      available.shuffle(_random);
+    }
+    final allPlaced = available.isEmpty;
     return SafeArea(
       child: Column(
         children: [
@@ -820,28 +866,86 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Wrap(
-                spacing: 8, runSpacing: 8, alignment: WrapAlignment.center,
-                children: categories.map((cat) {
-                  final selected = _selectedOptions.contains(cat);
-                  return GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        if (selected) _selectedOptions.remove(cat);
-                        else _selectedOptions.add(cat);
-                      });
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: selected ? _getColor('primary') : const Color(0xFF21262D),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: selected ? _getColor('primary')! : Colors.grey.shade700),
-                      ),
-                      child: Text(cat, style: const TextStyle(color: Colors.white, fontSize: 14)),
+              child: Column(
+                children: [
+                  Wrap(
+                    spacing: 8, runSpacing: 8, alignment: WrapAlignment.center,
+                    children: categories.map((cat) {
+                      final catItems = slots[cat] ?? [];
+                      return Container(
+                        width: 150, constraints: const BoxConstraints(minHeight: 60),
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF21262D),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: _getColor('primary')!.withOpacity(0.5), width: 1),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(cat, style: TextStyle(color: _getColor('primary'), fontSize: 12, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Wrap(
+                              spacing: 4, runSpacing: 4,
+                              children: catItems.map((item) {
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.greenAccent.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(item, style: const TextStyle(color: Colors.greenAccent, fontSize: 10)),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 12),
+                  if (available.isNotEmpty)
+                    Wrap(
+                      spacing: 6, runSpacing: 6, alignment: WrapAlignment.center,
+                      children: available.map((item) {
+                        return GestureDetector(
+                          onTap: () {
+                            showDialog(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                backgroundColor: const Color(0xFF21262D),
+                                title: Text('Place "$item"', style: const TextStyle(color: Colors.white, fontSize: 14)),
+                                content: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: categories.map((cat) {
+                                    return ListTile(
+                                      title: Text(cat, style: const TextStyle(color: Colors.white)),
+                                      onTap: () {
+                                        Navigator.of(ctx).pop();
+                                        setState(() {
+                                          available.remove(item);
+                                          slots[cat]?.add(item);
+                                        });
+                                      },
+                                    );
+                                  }).toList(),
+                                ),
+                              ),
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: _getColor('primary')!.withOpacity(0.3),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: _getColor('primary')!),
+                            ),
+                            child: Text(item, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                          ),
+                        );
+                      }).toList(),
                     ),
-                  );
-                }).toList(),
+                ],
               ),
             ),
           ),
@@ -850,12 +954,32 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
             child: SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: _selectedOptions.isEmpty ? null : () {
-                  _animController.forward(from: 0);
-                  setState(() => _showComplete = true);
-                },
+                onPressed: allPlaced
+                    ? () {
+                        bool allCorrect = true;
+                        for (final cat in categories) {
+                          final catItems = slots[cat] ?? [];
+                          for (final item in catItems) {
+                            if (itemToCategory[item] != cat) {
+                              allCorrect = false;
+                              break;
+                            }
+                          }
+                          if (!allCorrect) break;
+                        }
+                        if (allCorrect) {
+                          _animController.forward(from: 0);
+                          setState(() => _showComplete = true);
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Some items are misplaced! Try again.'), backgroundColor: Colors.red),
+                          );
+                          setState(() => _initLevel());
+                        }
+                      }
+                    : null,
                 style: ElevatedButton.styleFrom(backgroundColor: _getColor('primary'), padding: const EdgeInsets.symmetric(vertical: 14)),
-                child: const Text('Submit', style: TextStyle(color: Colors.white, fontSize: 16)),
+                child: const Text('Check', style: TextStyle(color: Colors.white, fontSize: 16)),
               ),
             ),
           ),
@@ -1325,10 +1449,12 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
   }
 
   List<int>? _ws2HitCell(Offset pos, BoxConstraints constraints, int gridSize) {
-    final cellW = constraints.maxWidth / gridSize;
-    final cellH = constraints.maxHeight / gridSize;
-    final c = (pos.dx / cellW).floor();
-    final r = (pos.dy / cellH).floor();
+    const spacing = 2.0;
+    final totalSpacing = spacing * (gridSize - 1);
+    final cellW = (constraints.maxWidth - totalSpacing) / gridSize;
+    final cellH = (constraints.maxHeight - totalSpacing) / gridSize;
+    final c = (pos.dx / (cellW + spacing)).floor();
+    final r = (pos.dy / (cellH + spacing)).floor();
     if (r >= 0 && r < gridSize && c >= 0 && c < gridSize) return [r, c];
     return null;
   }
@@ -1593,7 +1719,7 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
               height: _jigsawRows * pieceH,
               child: Image.network(
                 url,
-                fit: BoxFit.fill,
+                fit: BoxFit.cover,
                 errorBuilder: (_, __, ___) => Container(color: _getColor('primary')!.withOpacity(0.6)),
               ),
             ),
@@ -1666,7 +1792,7 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
                                 Positioned.fill(
                                   child: Opacity(
                                     opacity: 0.25,
-                                    child: Image.network(url, fit: BoxFit.fill,
+                                    child: Image.network(url, fit: BoxFit.cover,
                                         errorBuilder: (_, __, ___) => const SizedBox.shrink()),
                                   ),
                                 ),
@@ -2088,13 +2214,26 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
         mainAxisAlignment: MainAxisAlignment.center,
         children: List.generate(answer.length, (i) {
           final char = i < _currentAnswer.length ? _currentAnswer[i] : '';
-          return Container(
-            width: 34, height: 34, margin: const EdgeInsets.symmetric(horizontal: 2),
-            decoration: BoxDecoration(
-              color: char.isNotEmpty ? _getColor('primary') : const Color(0xFF30363D),
-              borderRadius: BorderRadius.circular(6),
+          return GestureDetector(
+            onTap: char.isNotEmpty ? () {
+              _playSound();
+              setState(() {
+                _currentAnswer = _currentAnswer.substring(0, i);
+                if (i < _answerGridIndices.length) {
+                  final gridIdx = _answerGridIndices[i];
+                  _usedLetterIndices.remove(gridIdx);
+                  _answerGridIndices.removeRange(i, _answerGridIndices.length);
+                }
+              });
+            } : null,
+            child: Container(
+              width: 34, height: 34, margin: const EdgeInsets.symmetric(horizontal: 2),
+              decoration: BoxDecoration(
+                color: char.isNotEmpty ? _getColor('primary') : const Color(0xFF30363D),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Center(child: Text(char, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16))),
             ),
-            child: Center(child: Text(char, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16))),
           );
         }),
       ),
@@ -2114,6 +2253,7 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
               setState(() {
                 _currentAnswer += entry.value;
                 _usedLetterIndices.add(entry.key);
+                _answerGridIndices.add(entry.key);
               });
               _checkAnswer(answer);
             },
@@ -2317,4 +2457,46 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
     chars.shuffle(_random);
     return chars;
   }
+}
+
+class _HangmanPainter extends CustomPainter {
+  final int wrongCount;
+  _HangmanPainter({required this.wrongCount});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.grey.shade600
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke;
+
+    final cx = size.width / 2;
+
+    canvas.drawLine(Offset(20, size.height - 10), Offset(20, 10), paint);
+    canvas.drawLine(Offset(20, 10), Offset(cx, 10), paint);
+    canvas.drawLine(Offset(cx, 10), Offset(cx, 25), paint);
+
+    if (wrongCount >= 1) {
+      paint.style = PaintingStyle.stroke;
+      canvas.drawCircle(Offset(cx, 35), 10, paint);
+    }
+    if (wrongCount >= 2) {
+      canvas.drawLine(Offset(cx, 45), Offset(cx, 75), paint);
+    }
+    if (wrongCount >= 3) {
+      canvas.drawLine(Offset(cx, 55), Offset(cx - 15, 65), paint);
+    }
+    if (wrongCount >= 4) {
+      canvas.drawLine(Offset(cx, 55), Offset(cx + 15, 65), paint);
+    }
+    if (wrongCount >= 5) {
+      canvas.drawLine(Offset(cx, 75), Offset(cx - 12, 95), paint);
+    }
+    if (wrongCount >= 6) {
+      canvas.drawLine(Offset(cx, 75), Offset(cx + 12, 95), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _HangmanPainter old) => old.wrongCount != wrongCount;
 }
