@@ -60,11 +60,17 @@ jobs:
       - name: Set app name
         run: |
           python3 -c "
-          import re
-          with open('ios/Runner/Info.plist') as f: c = f.read()
-          c = re.sub(r'<string>Runner</string>', '<string>Game 19</string>', c, count=1)
-          with open('ios/Runner/Info.plist', 'w') as f: f.write(c)
-          print('iOS app name set')"
+          import re, os
+          plist = 'ios/Runner/Info.plist'
+          if not os.path.exists(plist):
+              for root, dirs, files in os.walk('ios'):
+                  if 'Info.plist' in files:
+                      plist = os.path.join(root, 'Info.plist')
+                      break
+          with open(plist) as f: c = f.read()
+          c = c.replace('<string>Runner</string>', '<string>Game 19</string>')
+          with open(plist, 'w') as f: f.write(c)
+          print('iOS app name set to: Game 19')"
 
       - name: Build iOS simulator
         run: |
