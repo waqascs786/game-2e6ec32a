@@ -82,6 +82,10 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
   Set<int> _jigsawPlaced = {};
   int _lastJigsawLevelIndex = -1;
 
+  List<String> _classifyAvailable = [];
+  Map<String, List<String>> _classifySlots = {};
+  int _lastClassifyLevelIndex = -1;
+
   final TextEditingController _fillController = TextEditingController();
 
   static const List<Color> _wsColors = [
@@ -142,6 +146,9 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
     _answerGridIndices = [];
     _typedAnswer = '';
     _fillController.clear();
+    _classifyAvailable = [];
+    _classifySlots = {};
+    _lastClassifyLevelIndex = -1;
     if (_screen == _Screen.playing && !_hasPacks) {
       _internalLevelIndex = widget.currentLevel;
     }
@@ -338,13 +345,14 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
 
   // ========== MCQ ==========
   Widget _buildMCQScreen(GameLevel level) {
+    final hasImage = level.imageUrl.isNotEmpty || level.imageUrls.isNotEmpty;
     return SafeArea(
       child: Column(
         children: [
           _buildHeader(),
           _buildQuestion(level),
           const SizedBox(height: 8),
-          Expanded(child: _buildImageArea(level)),
+          if (hasImage) Expanded(child: _buildImageArea(level)),
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
@@ -391,13 +399,14 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
 
   // ========== TRUE / FALSE ==========
   Widget _buildTrueFalseScreen(GameLevel level) {
+    final hasImage = level.imageUrl.isNotEmpty || level.imageUrls.isNotEmpty;
     return SafeArea(
       child: Column(
         children: [
           _buildHeader(),
           _buildQuestion(level),
           const SizedBox(height: 8),
-          Expanded(child: _buildImageArea(level)),
+          if (hasImage) Expanded(child: _buildImageArea(level)),
           Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
@@ -543,13 +552,14 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
 
   // ========== MULTI SELECT ==========
   Widget _buildMultiSelectScreen(GameLevel level) {
+    final hasImage = level.imageUrl.isNotEmpty || level.imageUrls.isNotEmpty;
     return SafeArea(
       child: Column(
         children: [
           _buildHeader(),
           _buildQuestion(level),
           const SizedBox(height: 8),
-          Expanded(child: _buildImageArea(level)),
+          if (hasImage) Expanded(child: _buildImageArea(level)),
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
@@ -765,8 +775,11 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
 
   // ========== ORDERING ==========
   Widget _buildOrderingScreen(GameLevel level) {
-    if (_selectedOptions.isEmpty && level.options.isNotEmpty) {
-      _selectedOptions = List<String>.from(level.options)..shuffle(_random);
+    if (_selectedOptions.isEmpty) {
+      final source = level.emojis.isNotEmpty ? level.emojis : level.options;
+      if (source.isNotEmpty) {
+        _selectedOptions = List<String>.from(source)..shuffle(_random);
+      }
     }
     return SafeArea(
       child: Column(
@@ -774,7 +787,7 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
           _buildHeader(),
           _buildQuestion(level),
           const SizedBox(height: 8),
-          Expanded(child: _buildImageArea(level)),
+          if (level.imageUrl.isNotEmpty || level.imageUrls.isNotEmpty) Expanded(child: _buildImageArea(level)),
           Expanded(
             child: ReorderableListView(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -837,26 +850,18 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
   Widget _buildClassificationScreen(GameLevel level) {
     final categories = level.answer.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
     final itemToCategory = <String, String>{};
-    final items = <String>[];
-    final available = <String>[];
     for (final raw in level.emojis) {
       final parts = raw.split('|');
       if (parts.length == 2) {
-        final cat = parts[0].trim();
-        final val = parts[1].trim();
-        itemToCategory[val] = cat;
-        items.add(val);
-        available.add(val);
+        itemToCategory[parts[1].trim()] = parts[0].trim();
       }
     }
-    final slots = <String, List<String>>{};
-    for (final cat in categories) {
-      slots[cat] = [];
+    if (_lastClassifyLevelIndex != _internalLevelIndex || _classifyAvailable.isEmpty) {
+      _classifyAvailable = level.emojis.where((raw) => raw.contains('|')).map((raw) => raw.split('|')[1].trim()).toList()..shuffle(_random);
+      _classifySlots = {for (final cat in categories) cat: []};
+      _lastClassifyLevelIndex = _internalLevelIndex;
     }
-    if (_selectedOptions.isEmpty && available.isNotEmpty) {
-      available.shuffle(_random);
-    }
-    final allPlaced = available.isEmpty;
+    final allPlaced = _classifyAvailable.isEmpty;
     return SafeArea(
       child: Column(
         children: [
@@ -871,7 +876,7 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
                   Wrap(
                     spacing: 8, runSpacing: 8, alignment: WrapAlignment.center,
                     children: categories.map((cat) {
-                      final catItems = slots[cat] ?? [];
+                      final catItems = _classifySlots[cat] ?? [];
                       return Container(
                         width: 150, constraints: const BoxConstraints(minHeight: 60),
                         padding: const EdgeInsets.all(8),
@@ -888,13 +893,21 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
                             Wrap(
                               spacing: 4, runSpacing: 4,
                               children: catItems.map((item) {
-                                return Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.greenAccent.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(8),
+                                return GestureDetector(
+                                  onTap: () {
+                                    setState(() {
+                                      _classifySlots[cat]?.remove(item);
+                                      _classifyAvailable.add(item);
+                                    });
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.greenAccent.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(item, style: const TextStyle(color: Colors.greenAccent, fontSize: 10)),
                                   ),
-                                  child: Text(item, style: const TextStyle(color: Colors.greenAccent, fontSize: 10)),
                                 );
                               }).toList(),
                             ),
@@ -904,10 +917,10 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
                     }).toList(),
                   ),
                   const SizedBox(height: 12),
-                  if (available.isNotEmpty)
+                  if (_classifyAvailable.isNotEmpty)
                     Wrap(
                       spacing: 6, runSpacing: 6, alignment: WrapAlignment.center,
-                      children: available.map((item) {
+                      children: _classifyAvailable.map((item) {
                         return GestureDetector(
                           onTap: () {
                             showDialog(
@@ -923,8 +936,8 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
                                       onTap: () {
                                         Navigator.of(ctx).pop();
                                         setState(() {
-                                          available.remove(item);
-                                          slots[cat]?.add(item);
+                                          _classifyAvailable.remove(item);
+                                          _classifySlots[cat]?.add(item);
                                         });
                                       },
                                     );
@@ -958,7 +971,7 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
                     ? () {
                         bool allCorrect = true;
                         for (final cat in categories) {
-                          final catItems = slots[cat] ?? [];
+                          final catItems = _classifySlots[cat] ?? [];
                           for (final item in catItems) {
                             if (itemToCategory[item] != cat) {
                               allCorrect = false;
@@ -1879,18 +1892,18 @@ class _GameEngineState extends State<GameEngine> with SingleTickerProviderStateM
                                         width: 90,
                                         height: 90,
                                         child: url.isNotEmpty
-                                            ? _buildJigsawSlice(url, pieceIdx, 90 / _jigsawCols, 90 / _jigsawRows)
+                                            ? _buildJigsawSlice(url, pieceIdx, 90, 90)
                                             : Container(color: _getColor('primary')),
                                       ),
                                     ),
                                     childWhenDragging: Opacity(
                                       opacity: 0.3,
                                       child: url.isNotEmpty
-                                          ? _buildJigsawSlice(url, pieceIdx, pw / _jigsawCols, pw / _jigsawRows)
+                                          ? _buildJigsawSlice(url, pieceIdx, pw, pw)
                                           : Container(color: _getColor('primary')),
                                     ),
                                     child: url.isNotEmpty
-                                        ? _buildJigsawSlice(url, pieceIdx, pw / _jigsawCols, pw / _jigsawRows)
+                                        ? _buildJigsawSlice(url, pieceIdx, pw, pw)
                                         : Container(color: _getColor('primary')!.withOpacity(0.7)),
                                   );
                                 },
