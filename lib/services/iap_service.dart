@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_inapp_purchase/flutter_inapp_purchase.dart';
+import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:amazon_iap/amazon_iap.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class IAPService {
@@ -8,15 +9,17 @@ class IAPService {
   factory IAPService() => _instance;
   IAPService._internal();
 
-  final FlutterInappPurchase _iap = FlutterInappPurchase.instance;
-  StreamSubscription? _purchaseSub;
-  List<ProductCommon> _products = [];
+  final InAppPurchase _iap = InAppPurchase.instance;
+  final AmazonIAP _amazonIap = AmazonIAP.instance;
+  StreamSubscription<List<PurchaseDetails>>? _subscription;
+  List<ProductDetails> _products = [];
   bool _isAvailable = false;
+  bool _isAmazon = false;
   int _coins = 100;
   String? _gameId;
   String? _userId;
 
-  List<ProductCommon> get products => _products;
+  List<ProductDetails> get products => _products;
   bool get isAvailable => _isAvailable;
   int get coins => _coins;
   VoidCallback? onPurchased;
@@ -39,39 +42,53 @@ class IAPService {
     _gameId = gameId;
     _userId = userId;
     await _loadBalance();
-    if (!kIsWeb) {
+    if (kIsWeb) return;
+
+    // Try Amazon first (Fire OS)
+    if (defaultTargetPlatform == TargetPlatform.android) {
       try {
-        _isAvailable = await _iap.initConnection();
-        if (!_isAvailable) return;
-        _purchaseSub = _iap.purchaseUpdatedListener.listen(_onPurchaseUpdate, onError: (e) => debugPrint('IAP error: ' + e.toString()));
-      } catch (e) {
-        debugPrint('IAP init failed: ' + e.toString());
-        _isAvailable = false;
+        await _amazonIap.setup();
+        _isAmazon = true;
+        _isAvailable = true;
+        _amazonIap.onPurchaseResponse.listen((result) {
+          if (result.purchaseState == AmazonPurchaseState.purchased) {
+            final coins = coinsForProduct(result.sku);
+            if (coins > 0) addCoins(coins);
+          }
+        });
+        return;
+      } catch (_) {
+        _isAmazon = false;
       }
     }
+
+    // Google Play / Apple
+    _isAvailable = await _iap.isAvailable();
+    if (!_isAvailable) return;
+    _subscription = _iap.purchaseStream.listen(_onPurchaseUpdate, onDone: () => _subscription?.cancel(), onError: (e) => debugPrint('IAP error: ' + e.toString()));
   }
 
   Future<void> loadProducts() async {
     if (kIsWeb || !_isAvailable) return;
-    try {
-      _products = await _iap.fetchProducts(skus: coinProductIds, type: ProductQueryType.InApp);
-    } catch (e) {
-      debugPrint('Failed to load IAP products: ' + e.toString());
+    if (_isAmazon) {
+      try {
+        await _amazonIap.getProductData(coinProductIds);
+      } catch (_) {}
+      return;
     }
+    final response = await _iap.queryProductDetails(coinProductIds.toSet());
+    _products = response.productDetails;
   }
 
-  Future<void> buyCoins(ProductCommon product) async {
+  Future<void> buyCoins(dynamic product) async {
     if (kIsWeb || !_isAvailable) return;
-    try {
-      await _iap.requestPurchase(
-        RequestPurchaseProps.inApp((
-          apple: RequestPurchaseIosProps(sku: product.id),
-          google: RequestPurchaseAndroidProps(skus: [product.id]),
-        )),
-      );
-    } catch (e) {
-      debugPrint('IAP buy failed: ' + e.toString());
+    if (_isAmazon) {
+      final sku = product is String ? product : product.id;
+      await _amazonIap.purchase(sku);
+      return;
     }
+    final param = PurchaseParam(productDetails: product as ProductDetails);
+    await _iap.buyConsumable(purchaseParam: param);
   }
 
   Future<void> addCoins(int amount) async {
@@ -86,12 +103,14 @@ class IAPService {
     return true;
   }
 
-  void _onPurchaseUpdate(Purchase purchase) {
-    if (purchase.purchaseState == PurchaseState.Purchased) {
-      final coins = coinsForProduct(purchase.productId);
-      if (coins > 0) {
-        addCoins(coins);
-        debugPrint('Delivered ' + coins.toString() + ' coins for ' + purchase.productId);
+  void _onPurchaseUpdate(List<PurchaseDetails> purchases) {
+    for (final purchase in purchases) {
+      if (purchase.status == PurchaseStatus.purchased || purchase.status == PurchaseStatus.restored) {
+        final coins = coinsForProduct(purchase.productID);
+        if (coins > 0) addCoins(coins);
+      }
+      if (purchase.pendingCompletePurchase) {
+        _iap.completePurchase(purchase);
       }
     }
     onPurchased?.call();
@@ -118,8 +137,5 @@ class IAPService {
     }
   }
 
-  void dispose() {
-    _purchaseSub?.cancel();
-    _iap.endConnection();
-  }
+  void dispose() => _subscription?.cancel();
 }
