@@ -51,9 +51,12 @@ class IAPService {
         _isAmazon = true;
         _isAvailable = true;
         _amazonIap.onPurchaseResponse.listen((result) {
-          if (result.purchaseState == AmazonPurchaseState.purchased) {
-            final coins = coinsForProduct(result.sku);
-            if (coins > 0) addCoins(coins);
+          if (result.requestStatus == PurchaseRequestStatus.successful) {
+            final sku = result.receipt?.sku;
+            if (sku != null) {
+              final coins = coinsForProduct(sku);
+              if (coins > 0) addCoins(coins);
+            }
           }
         });
         return;
