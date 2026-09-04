@@ -18,7 +18,7 @@ void main() async {
         : defaultTargetPlatform == TargetPlatform.iOS
             ? const FirebaseOptions(
                 apiKey: 'AIzaSyAzN4vJZlYmGVzm8sCsz1bEPawQEiKIc6k',
-                appId: '1:311998863107:ios:placeholder',
+                appId: '1:311998863107:ios:a492472970340e432cfb36',
                 messagingSenderId: '311998863107',
                 projectId: 'trivianinja-bff5c',
                 storageBucket: 'trivianinja-bff5c.firebasestorage.app',
